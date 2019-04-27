@@ -11,7 +11,7 @@ use de::deserialize_duration;
 use errors::*;
 use widgets::text::TextWidget;
 use widgets::graph::GraphWidget;
-use widget::I3BarWidget;
+use widget::{I3BarWidget, State};
 use scheduler::Task;
 
 use uuid::Uuid;
@@ -53,7 +53,7 @@ impl NetworkDevice {
             Ok(false)
         } else {
             let operstate = read_file(&operstate_file)?;
-            Ok(operstate == "up")
+            Ok(operstate != "down")
         }
     }
 
@@ -200,6 +200,10 @@ pub struct Net {
     hide_inactive: bool,
     hide_missing: bool,
     last_update: Instant,
+    warn_tx: usize,
+    critical_tx: usize,
+    warn_rx: usize,
+    critical_rx: usize
 }
 
 #[derive(Deserialize, Debug, Default, Clone)]
@@ -252,56 +256,43 @@ pub struct NetConfig {
     /// Whether to show the download throughput graph of active networks.
     #[serde(default = "NetConfig::default_graph_down")]
     pub graph_down: bool,
+
+    #[serde(default = "NetConfig::default_warning_tx")]
+    pub warn_tx: usize,
+
+    #[serde(default = "NetConfig::default_critical_tx")]
+    pub critical_tx: usize,
+
+    #[serde(default = "NetConfig::default_warning_rx")]
+    pub warn_rx: usize, 
+
+    #[serde(default = "NetConfig::default_critical_rx")]
+    pub critical_rx: usize,
 }
 
 impl NetConfig {
-    fn default_interval() -> Duration {
-        Duration::from_secs(1)
-    }
+    fn default_interval() -> Duration { Duration::from_secs(1) }
+    fn default_device() -> String { "lo".to_string() }
+    fn default_hide_inactive() -> bool { false }
+    fn default_hide_missing() -> bool { false }
 
-    fn default_device() -> String {
-        "lo".to_string()
-    }
+    fn default_warning_tx() -> usize { 94_371_840 }
+    fn default_critical_tx() -> usize { 104_857_600 }
 
-    fn default_hide_inactive() -> bool {
-        false
-    }
+    fn default_warning_rx() -> usize { 94_371_840 }
+    fn default_critical_rx() -> usize { 104_857_600 }   
 
-    fn default_hide_missing() -> bool {
-        false
-    }
+    fn default_max_ssid_width() -> usize { 21 }
+    fn default_ssid() -> bool { false }
+    fn default_bitrate() -> bool { false }
 
-    fn default_max_ssid_width() -> usize {
-        21
-    }
+    fn default_ip() -> bool { false }
 
-    fn default_ssid() -> bool {
-        false
-    }
+    fn default_speed_up() -> bool { true }
+    fn default_speed_down() -> bool { true }
 
-    fn default_bitrate() -> bool {
-        false
-    }
-
-    fn default_ip() -> bool {
-        false
-    }
-
-    fn default_speed_up() -> bool {
-        true
-    }
-
-    fn default_speed_down() -> bool {
-        true
-    }
-
-    fn default_graph_up() -> bool {
-        false
-    }
-
-    fn default_graph_down() -> bool {
-        false
-    }
+    fn default_graph_up() -> bool { false }
+    fn default_graph_down() -> bool { false }
 }
 
 impl ConfigBlock for Net {
@@ -319,6 +310,12 @@ impl ConfigBlock for Net {
                 "net_wireless" } else {
                 "net_wired"
             }),
+            critical_rx: block_config.critical_rx,
+            warn_rx: block_config.warn_rx,
+
+            critical_tx: block_config.critical_tx,
+            warn_tx: block_config.warn_tx,
+
             // Might want to signal an error if the user wants the SSID of a
             // wired connection instead.
             ssid: if block_config.ssid && wireless {
@@ -387,12 +384,30 @@ fn read_file(path: &Path) -> Result<String> {
 fn convert_speed(speed: u64) -> (f64, &'static str) {
     // the values for the match are so the speed doesn't go above 3 characters
     let (speed, unit) = match speed {
-        x if x > 999_999_999 => (speed as f64 / 1_000_000_000.0, "G"),
-        x if x > 999_999 => (speed as f64 / 1_000_000.0, "M"),
-        x if x > 999 => (speed as f64 / 1_000.0, "k"),
+        x if x > 999_999_999 => (speed as f64 / 1_073_741_824.00, "G"),
+        x if x > 999_999 => (speed as f64 / 1_048_576.00, "M"),
+        x if x > 999 => (speed as f64 / 1_024.00, "k"),
         _ => (speed as f64, "B"),
     };
     (speed, unit)
+}
+
+fn determine_state(t: usize, bytes: usize, warn_bytes: usize, critical_bytes: usize) -> State {
+    if bytes >= critical_bytes {
+        State::Critical
+    }
+    else if bytes >= warn_bytes {
+        State::Warning
+    } 
+    else {
+        if t == 0 {
+            State::Info
+        }
+        else {
+            State::Good
+        }
+    }
+
 }
 
 impl Block for Net {
@@ -451,10 +466,13 @@ impl Block for Net {
             let current_tx = self.device.tx_bytes()?;
             let tx_bytes = ((current_tx - self.tx_bytes) as f64 / update_interval) as u64;
             let (tx_speed, tx_unit) = convert_speed(tx_bytes);
+            let (tx_total, tx_total_unit) = convert_speed(current_tx);
             self.tx_bytes = current_tx;
 
             if let Some(ref mut tx_widget) = self.output_tx {
-                tx_widget.set_text(format!("{:5.1}{}", tx_speed, tx_unit));
+                tx_widget.set_text(format!("{:_>5.*}{} {:_>5.*}{} - {}B", 5, tx_total.to_string(), tx_total_unit, 5, tx_speed.to_string(), tx_unit, current_tx));
+                let state = determine_state(0 as usize, current_tx as usize, self.warn_tx, self.critical_tx);
+                tx_widget.set_state(state);
             };
 
             if let Some(ref mut graph_tx_widget) = self.graph_tx {
@@ -467,10 +485,13 @@ impl Block for Net {
             let current_rx = self.device.rx_bytes()?;
             let rx_bytes = ((current_rx - self.rx_bytes) as f64 / update_interval) as u64;
             let (rx_speed, rx_unit) = convert_speed(rx_bytes);
+            let (rx_total, rx_total_unit) = convert_speed(current_rx);
             self.rx_bytes = current_rx;
 
             if let Some(ref mut rx_widget) = self.output_rx {
-                rx_widget.set_text(format!("{:5.1}{}", rx_speed, rx_unit));
+                rx_widget.set_text(format!("{:_>5.*}{} {:_>5.*}{} - {}B", 5, rx_total.to_string(), rx_total_unit, 5, rx_speed.to_string(), rx_unit, current_rx));
+                let state = determine_state(1 as usize, current_rx as usize, self.warn_rx, self.critical_rx);
+                rx_widget.set_state(state);
             };
 
             if let Some(ref mut graph_rx_widget) = self.graph_rx {

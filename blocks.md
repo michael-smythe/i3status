@@ -2,6 +2,7 @@
 
 - [Backlight](#backlight)
 - [Battery](#battery)
+- [Bluetooth](#bluetooth)
 - [CPU Utilization](#cpu-utilization)
 - [Custom](#custom)
 - [Disk Space](#disk-space)
@@ -72,7 +73,7 @@ Creates a block which displays the current battery state (Full, Charging or Disc
 
 The battery block collapses when the battery is fully charged -- or, in the case of some Thinkpad batteries, when it reports "Not charging".
 
-The battery block supports reading charging and status information from `sysfs`, or optionally through the [Upower](https://upower.freedesktop.org/) D-Bus interface on systems where that is available.
+The battery block supports reading charging and status information from `sysfs`, or optionally through the [UPower](https://upower.freedesktop.org/) D-Bus interface on systems where that is available. Note that UPower has the notion of a DisplayDevice, which is a single logical power source representing all physical power sources. This is for example useful if your system has multiple batteries, in which case the DisplayDevice behaves as if you had a single larger battery.
 
 ### Examples
 
@@ -98,7 +99,7 @@ format = "{percentage}% {time}"
 
 Key | Values | Required | Default
 ----|--------|----------|--------
-`device` | The device in `/sys/class/power_supply/` to read from. | No | `"BAT0"`
+`device` | The device in `/sys/class/power_supply/` to read from. When using UPower, this can also be `"DisplayDevice"`. | No | `"BAT0"`
 `interval` | Update interval, in seconds. | No | `10`
 `format` | A format string. See below for available placeholders. | No | `"{percentage}%"`
 `show` | Deprecated in favour of `format`. Show remaining `"time"`, `"percentage"` or `"both"` | No | `"percentage"`
@@ -113,6 +114,30 @@ Placeholder | Description
 `{percentage}` | Battery level, in percent.
 `{time}` | Time remaining until (dis)charge is complete.
 `{power}` | Power consumption (in watts) by the battery or from the power supply when charging.
+
+## Bluetooth
+
+Creates a block which displays the connectivity of a given Bluetooth device, or the battery level if this is supported. Relies on the Bluez D-Bus API, and is therefore asynchronous.
+
+When the device can be identified as an audio headset, a keyboard, joystick, or mouse, use the relevant icon. Otherwise, fall back on the generic Bluetooth symbol.
+
+Right-clicking the block will attempt to connect (or disconnect) the device.
+
+### Examples
+
+A block for a Bluetooth device with the given MAC address:
+
+```toml
+[[block]]
+block = "bluetooth"
+mac = "A0:8A:F5:B8:01:FD"
+```
+
+### Options
+
+Key | Values | Required | Default
+----|--------|----------|--------
+`mac` | MAC address of the Bluetooth device. | Yes | None
 
 ## CPU Utilization
 

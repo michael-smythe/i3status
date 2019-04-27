@@ -5,14 +5,14 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use chan::Sender;
 
-use block::{Block, ConfigBlock};
-use config::Config;
-use de::deserialize_duration;
-use errors::*;
-use widgets::text::TextWidget;
-use widgets::graph::GraphWidget;
-use widget::{I3BarWidget, State};
-use scheduler::Task;
+use crate::block::{Block, ConfigBlock};
+use crate::config::Config;
+use crate::de::deserialize_duration;
+use crate::errors::*;
+use crate::widgets::text::TextWidget;
+use crate::widgets::graph::GraphWidget;
+use crate::widget::{I3BarWidget, State};
+use crate::scheduler::Task;
 
 use uuid::Uuid;
 
@@ -20,6 +20,7 @@ pub struct NetworkDevice {
     device: String,
     device_path: PathBuf,
     wireless: bool,
+    tun: bool,
 }
 
 impl NetworkDevice {
@@ -30,11 +31,13 @@ impl NetworkDevice {
 
         // I don't believe that this should ever change, so set it now:
         let wireless = device_path.join("wireless").exists();
+        let tun = device_path.join("tun_flags").exists() || device.starts_with("tun") || device.starts_with("tap");
 
         NetworkDevice {
             device,
             device_path,
             wireless,
+            tun,
         }
     }
 
@@ -51,6 +54,8 @@ impl NetworkDevice {
             // It seems more reasonable to treat these as inactive networks as
             // opposed to erroring out the entire block.
             Ok(false)
+        } else if self.tun {
+            Ok(true)
         } else {
             let operstate = read_file(&operstate_file)?;
             Ok(operstate != "down")
@@ -74,6 +79,11 @@ impl NetworkDevice {
     /// Checks whether this device is wireless.
     pub fn is_wireless(&self) -> bool {
         self.wireless
+    }
+
+    /// Checks whether this device is vpn network.
+    pub fn is_vpn(&self) -> bool {
+        self.tun
     }
 
     /// Queries the wireless SSID of this device (using `iw`), if it is
@@ -303,11 +313,13 @@ impl ConfigBlock for Net {
         let init_rx_bytes = device.rx_bytes().unwrap_or(0);
         let init_tx_bytes = device.tx_bytes().unwrap_or(0);
         let wireless = device.is_wireless();
+        let vpn = device.is_vpn();
         Ok(Net {
             id: Uuid::new_v4().simple().to_string(),
             update_interval: block_config.interval,
             network: TextWidget::new(config.clone()).with_icon(if wireless {
-                "net_wireless" } else {
+                "net_wireless" } else if vpn {
+                "net_vpn" } else {
                 "net_wired"
             }),
             critical_rx: block_config.critical_rx,
